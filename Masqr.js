@@ -1,68 +1,64 @@
-import fs from "node:fs"
-import path from "node:path"
-import fetch from "node-fetch"
+import fetch from "node-fetch";
 
-const LICENSE_SERVER_URL = "https://masqr.gointerstellar.app/validate?license="
-const Fail = fs.readFileSync("Failed.html", "utf8")
+const LICENSE_SERVER_URL = "https://masqr.gointerstellar.app/validate?license=";
 
+function customAuthMiddleware(req, res, next) {
+  // Skip non-login routes if needed, or apply globally
+  // For now, apply globally to all requests
 
-export function setupMasqr(app) {
-  app.use(async (req, res, next) => {
-    if (req.url.includes("/ca/")) {
-      next()
-      return
-    }
+  // If user already authenticated (cookie present), continue
+  if (req.cookies["authcheck"]) {
+    return next();
+  }
 
-    const authheader = req.headers.authorization
-    // Extract HWID from custom header (fallback to UNKNOWN_HWID)
-    const hwid = req.headers["x-hwid"] || "UNKNOWN_HWID"
+  // Extract Authorization header
+  const authheader = req.headers.authorization;
+  if (!authheader || !authheader.startsWith("Basic ")) {
+    res.setHeader("WWW-Authenticate", "Basic");
+    return res.status(401).send("Authentication required");
+  }
 
-    if (req.cookies["authcheck"]) {
-      console.log(`Auth cookie present, HWID: ${hwid}`)
-      next()
-      return
-    }
+  // Decode username:password
+  const [username, password] = Buffer.from(authheader.split(" ")[1], "base64")
+    .toString()
+    .split(":");
 
-    if (req.cookies["refreshcheck"] !== "true") {
-      res.cookie("refreshcheck", "true", { maxAge: 10000 })
-      MasqFail(req, res)
-      return
-    }
+  if (!username || !password) {
+    res.setHeader("WWW-Authenticate", "Basic");
+    return res.status(401).send("Invalid authentication");
+  }
 
-    if (!authheader) {
-      res.setHeader("WWW-Authenticate", "Basic")
-      res.status(401)
-      MasqFail(req, res)
-      return
-    }
+  // Extract HWID header, fallback to UNKNOWN_HWID
+  const hwid = req.headers["x-hwid"] || "UNKNOWN_HWID";
 
-    const auth = Buffer.from(authheader.split(" ")[1], "base64").toString().split(":")
-    const pass = auth[1]
+  // Optionally, check username against config.users (basic whitelist)
+  // Or skip this if license server validates everything
 
-    try {
-      // Pass hwid as query param to license validation server
-      const licenseCheckResponse = await fetch(
-        LICENSE_SERVER_URL + pass + "&host=" + req.headers.host + "&hwid=" + encodeURIComponent(hwid)
-      )
-      const licenseCheck = (await licenseCheckResponse.json())["status"]
-
-      console.log(
-        LICENSE_SERVER_URL + pass + "&host=" + req.headers.host + "&hwid=" + hwid + " returned " + licenseCheck
-      )
-
-      if (licenseCheck === "License valid") {
-        // Log or save HWID as needed here
+  // Call license server to validate license+hwid
+  fetch(LICENSE_SERVER_URL + encodeURIComponent(password) + "&host=" + req.headers.host + "&hwid=" + encodeURIComponent(hwid))
+    .then(r => r.json())
+    .then(data => {
+      if (data.status === "License valid") {
+        // Set auth cookie for persistent login
         res.cookie("authcheck", "true", {
-          expires: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000),
-        })
-        res.send("<script> window.location.href = window.location.href </script>")
-        return
-      }
+          expires: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000), // 1 year
+          httpOnly: true,
+          secure: process.env.NODE_ENV === "production",
+        });
 
-      MasqFail(req, res)
-    } catch (error) {
-      console.error(error)
-      MasqFail(req, res)
-    }
-  })
+        console.log(`User ${username} logged in with HWID ${hwid}`);
+
+        // Redirect or continue
+        return res.send("<script>window.location.reload()</script>");
+      } else {
+        res.setHeader("WWW-Authenticate", "Basic");
+        return res.status(401).send("Invalid license");
+      }
+    })
+    .catch(err => {
+      console.error("License validation error:", err);
+      res.status(500).send("Server error");
+    });
 }
+
+export default customAuthMiddleware;
