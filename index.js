@@ -30,7 +30,12 @@ if (config.challenge !== false) {
   Object.entries(config.users).forEach(([username, password]) => {
     console.log(chalk.blue(`Username: ${username}, Password: ${password}`));
   });
-  app.use(basicAuth({ users: config.users, challenge: true }));
+  import customAuthMiddleware from "./customAuthMiddleware.js";
+
+  if (config.challenge !== false) {
+    app.use(customAuthMiddleware);
+}
+
 }
 
 app.get("/e/*", async (req, res, next) => {
