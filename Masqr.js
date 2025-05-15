@@ -5,6 +5,7 @@ import fetch from "node-fetch"
 const LICENSE_SERVER_URL = "https://masqr.gointerstellar.app/validate?license="
 const Fail = fs.readFileSync("Failed.html", "utf8")
 
+
 export function setupMasqr(app) {
   app.use(async (req, res, next) => {
     if (req.url.includes("/ca/")) {
@@ -13,8 +14,11 @@ export function setupMasqr(app) {
     }
 
     const authheader = req.headers.authorization
+    // Extract HWID from custom header (fallback to UNKNOWN_HWID)
+    const hwid = req.headers["x-hwid"] || "UNKNOWN_HWID"
 
     if (req.cookies["authcheck"]) {
+      console.log(`Auth cookie present, HWID: ${hwid}`)
       next()
       return
     }
@@ -36,14 +40,18 @@ export function setupMasqr(app) {
     const pass = auth[1]
 
     try {
+      // Pass hwid as query param to license validation server
       const licenseCheckResponse = await fetch(
-        LICENSE_SERVER_URL + pass + "&host=" + req.headers.host
+        LICENSE_SERVER_URL + pass + "&host=" + req.headers.host + "&hwid=" + encodeURIComponent(hwid)
       )
       const licenseCheck = (await licenseCheckResponse.json())["status"]
+
       console.log(
-        LICENSE_SERVER_URL + pass + "&host=" + req.headers.host + " returned " + licenseCheck
+        LICENSE_SERVER_URL + pass + "&host=" + req.headers.host + "&hwid=" + hwid + " returned " + licenseCheck
       )
+
       if (licenseCheck === "License valid") {
+        // Log or save HWID as needed here
         res.cookie("authcheck", "true", {
           expires: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000),
         })
@@ -57,22 +65,4 @@ export function setupMasqr(app) {
       MasqFail(req, res)
     }
   })
-}
-
-async function MasqFail(req, res) {
-  if (!req.headers.host) {
-    return
-  }
-  const unsafeSuffix = req.headers.host + ".html"
-  const safeSuffix = path.normalize(unsafeSuffix).replace(/^(\.\.(\/|\\|$))+/, "")
-  const safeJoin = path.join(process.cwd() + "/Masqrd", safeSuffix)
-  try {
-    await fs.promises.access(safeJoin)
-    const FailLocal = await fs.promises.readFile(safeJoin, "utf8")
-    res.setHeader("Content-Type", "text/html")
-    res.send(FailLocal)
-  } catch (e) {
-    res.setHeader("Content-Type", "text/html")
-    res.send(Fail)
-  }
 }
